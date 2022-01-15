@@ -1,0 +1,285 @@
+#!/bin/sh
+
+#######################################
+#
+# docker-mac
+#
+# Author: shoma07
+# LICENSE: MIT
+#
+###########################################################################
+#
+#  Copyright 2022 shoma07
+#
+#  Permission is hereby granted, free of charge, to any person obtaining
+#  a copy of this software and associated documentation files (the
+#  "Software"), to deal in the Software without restriction, including
+#  without limitation the rights to use, copy, modify, merge, publish,
+#  distribute, sublicense, and/or sell copies of the Software, and to
+#  permit persons to whom the Software is furnished to do so, subject to
+#  the following conditions:
+#
+#  The above copyright notice and this permission notice shall be
+#  included in all copies or substantial portions of the Software.
+#
+#  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+#  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+#  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+#  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+#  LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+#  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+#  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+#
+###########################################################################
+
+usage () {
+  cat <<-EOF
+$(basename $0) <command> [arguments...]
+
+command:
+
+  install                                 install dependences
+  uninstall                               display uninstall script
+  create -c <cpus> -m <mem> -d <disk>     create vm
+                                          example: docker-mac create -c 3 -m 6G -d 64G
+  destroy                                 destroy vm
+  start                                   start vm
+  stop                                    stop vm
+  restart                                 restart vm
+  expose <port>                           expose port from vm to host
+  unexpose <port>                         unexpose port from vm to host
+EOF
+
+  exit 1
+}
+
+_arch () {
+  uname -m
+}
+
+_tmp_path () {
+  echo "${TMPDIR}"
+}
+
+_home_path () {
+  echo "${HOME}"
+}
+
+_cloud_config () {
+  curl -sfL https://gist.githubusercontent.com/ww24/7c6c722bbd842657b9cebfe600972904/raw/44c30ce8062e1050cefa97855817a260e69057b1/cloud-config-$(_arch).yaml
+}
+
+_valid_number () {
+  var=${1}
+  expr ${1} + 1 1>/dev/null 2>/dev/null
+
+  test $? == 0 || exit 1
+}
+
+_docker_version () {
+  echo "20.10.12"
+}
+
+_compose_version () {
+  echo "2.2.3"
+}
+
+_helper_version () {
+  echo "0.6.4"
+}
+
+_vm_user () {
+  echo "ubuntu"
+}
+
+_vm_name () {
+  echo "docker-vm"
+}
+
+_vm_ip () {
+  multipass info $(_vm_name) --format json | jq -r '.info["docker-vm"].ipv4[0]'
+}
+
+_vm_port () {
+  echo "2375"
+}
+
+_vm_ssh_key () {
+  echo "/var/root/Library/Application Support/multipassd/ssh-keys/id_rsa"
+}
+
+_expose_ssh_command () {
+  port=${1}
+  _valid_number ${port}
+
+  echo "ssh -i "$(_vm_ssh_key)" -fNL ${port}:localhost:${port} $(_vm_user)@$(_vm_ip)"
+}
+
+_check_expose () {
+  res=$(ps -ax | grep "$(_expose_ssh_command ${1})" | grep -v "grep")
+
+  if [ -n "${res}" ]; then
+    echo "true"
+  else
+    echo "false"
+  fi
+}
+
+docker_mac_install () {
+  _docker_mac_install_homebrew
+  _docker_mac_install_jq
+  _docker_mac_install_multipass
+  _docker_mac_install_docker
+  _docker_mac_install_helper
+}
+
+_docker_mac_install_homebrew () {
+  [ -n "$(which brew)" ] && echo "Already install homebrew." && return
+
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+}
+
+_docker_mac_install_jq () {
+  [ -n "$(which jq)" ] && echo "Already install jq." && return
+
+  brew install jq
+}
+
+_docker_mac_install_multipass () {
+  [ -n "$(which multipass)" ] && echo "Already install multipass." && return
+
+  brew install --cask multipass
+}
+
+_docker_mac_install_docker () {
+  [ -n "$(which docker)" ] && echo "Already install docker." && return
+
+  curl -sL https://download.docker.com/mac/static/stable/$(_arch)/docker-$(_docker_version).tgz | tar xzv -C /usr/local/lib
+  curl -sL -o /usr/local/lib/docker/cli-plugins/docker-compose \
+    https://github.com/docker/compose/releases/download/v$(_compose_version)/docker-compose-darwin-$(_arch)
+
+  chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+  sudo xattr -rc /usr/local/lib/docker
+
+  ln -nfs /usr/local/lib/docker/docker /usr/local/bin/
+  ln -nfs /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/
+}
+
+_docker_mac_install_helper () {
+  [ -n "$(which docker-credential-osxkeychain)" ] && echo "Already install docker-credential-osxkeychain." && return
+
+  curl -sL https://github.com/docker/docker-credential-helpers/releases/download/v$(_helper_version)/docker-credential-osxkeychain-v$(_helper_version)-amd64.tar.gz | \
+    tar xzv -C /usr/local/bin
+  chmod +x /usr/local/bin/docker-credential-osxkeychain
+}
+
+docker_mac_uninstall () {
+  cat <<-EOF
+Please execute!:
+
+$ docker-mac stop
+$ docker-mac destroy
+$ unlink /usr/local/bin/docker
+$ rm /usr/local/bin/docker-credential-osxkeychain
+$ rm -r /usr/local/lib/docker
+$ brew uninstall --cask multipass
+EOF
+}
+
+docker_mac_create () {
+  cpus="1"
+  mem="2"
+  disk="32"
+
+  OPTIONS=`getopt c:m:d: "$@"`
+  eval set -- "$OPTIONS"
+
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -c) cpus="${2}"; shift 2;;
+      -m) mem="${2}"; shift 2;;
+      -d) disk="${2}"; shift 2;;
+      --) shift; break;;
+    esac
+  done
+
+  file="$(_tmp_path)/$(uuidgen).yaml"
+  _cloud_config > ${file}
+  multipass launch --name docker-vm2 --cpus ${cpus} --mem ${mem} --disk ${disk} --cloud-init $(file) 20.04
+  rm ${file}
+
+  multipass mount $(_home_path) $(_vm_name):$(_home_path)
+  multipass mount /private/tmp $(_vm_name):/tmp
+
+  docker context create $(_vm_name) --docker "host=tcp://$(_vm_ip):$(_vm_port)"
+  docker context update $(_vm_name) --docker "host=tcp://$(_vm_ip):$(_vm_port)"
+  docker context use $(_vm_name)
+  docker login
+}
+
+docker_mac_destroy () {
+  multipass stop $(_vm_name)
+  multipass unmount $(_vm_name):$(_home_path)
+  multipass unmount $(_vm_name):/tmp
+  multipass delete $(_vm_name)
+  multipass purge
+
+  docker context rm -f $(_vm_name)
+}
+
+docker_mac_start () {
+  multipass start $(_vm_name)
+}
+
+docker_mac_stop () {
+  multipass stop $(_vm_name)
+}
+
+docker_mac_restart () {
+  multipass restart $(_vm_name)
+}
+
+docker_mac_expose () {
+  port=${1}
+  _valid_number ${port}
+  checked="$(_check_expose ${port})"
+
+  if [ "${checked}" == "false" ]; then
+    sudo ssh -i "$(_vm_ssh_key)" -fNL ${port}:localhost:${port} $(_vm_user)@$(_vm_ip)
+  else
+    echo "Already exposed ${port}!"
+  fi
+}
+
+docker_mac_unexpose () {
+  port=${1}
+  _valid_number ${port}
+  checked="$(_check_expose ${port})"
+
+  if [ "${checked}" == "true" ]; then
+    ps -ax | grep "$(_expose_ssh_command ${1})" | grep -v "grep" | sed "s/??.*//g" | xargs sudo kill
+  else
+    echo "${port} port is not expose!"
+  fi
+}
+
+docker_mac_help () {
+  usage
+}
+
+main () {
+  command="docker_mac_${1}"
+  shift
+
+  type ${command} 2>/dev/null 1>/dev/null
+
+  exist="${?}"
+
+  if [ ${exist} == 1 ]; then
+    usage
+  fi
+
+  ${command} "$@"
+}
+
+main "$@"
