@@ -76,12 +76,28 @@ _valid_number () {
   test $? == 0 || exit 1
 }
 
+_docker_arch () {
+  if [ "$(_arch)" == "arm64" ]; then
+    echo "aarch64"
+  else
+    echo "amd64"
+  fi
+}
+
 _docker_version () {
-  echo "20.10.12"
+  echo "20.10.14"
 }
 
 _compose_version () {
   echo "2.2.3"
+}
+
+_helper_arch () {
+  if [ "$(_arch)" == "arm64" ]; then
+    echo "arm64"
+  else
+    echo "$(_arch)"
+  fi
 }
 
 _helper_version () {
@@ -154,23 +170,23 @@ _docker_mac_install_multipass () {
 _docker_mac_install_docker () {
   [ -n "$(which docker)" ] && echo "Already install docker." && return
 
-  curl -sL https://download.docker.com/mac/static/stable/$(_arch)/docker-$(_docker_version).tgz | tar xzv -C /usr/local/lib
-  curl -sL -o /usr/local/lib/docker/cli-plugins/docker-compose \
-    https://github.com/docker/compose/releases/download/v$(_compose_version)/docker-compose-darwin-$(_arch)
+  curl -sL https://download.docker.com/mac/static/stable/$(_docker_arch)/docker-$(_docker_version).tgz | sudo tar xzv -C /opt
+  sudo curl -sL -o /opt/docker/cli-plugins/docker-compose \
+    https://github.com/docker/compose/releases/download/v$(_compose_version)/docker-compose-darwin-$(_docker_arch)
 
-  chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-  sudo xattr -rc /usr/local/lib/docker
+  sudo chmod +x /opt/docker/cli-plugins/docker-compose
+  sudo sudo xattr -rc /opt/docker
 
-  ln -nfs /usr/local/lib/docker/docker /usr/local/bin/
-  ln -nfs /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/
+  sudo ln -nfs /opt/docker/docker /usr/local/bin/
+  sudo ln -nfs /opt/docker/cli-plugins/docker-compose /usr/local/bin/
 }
 
 _docker_mac_install_helper () {
   [ -n "$(which docker-credential-osxkeychain)" ] && echo "Already install docker-credential-osxkeychain." && return
 
-  curl -sL https://github.com/docker/docker-credential-helpers/releases/download/v$(_helper_version)/docker-credential-osxkeychain-v$(_helper_version)-amd64.tar.gz | \
-    tar xzv -C /usr/local/bin
-  chmod +x /usr/local/bin/docker-credential-osxkeychain
+  curl -sfL https://github.com/docker/docker-credential-helpers/releases/download/v$(_helper_version)/docker-credential-osxkeychain-v$(_helper_version)-$(_helper_arch).tar.gz | \
+    sudo tar xz -C /usr/local/bin
+  sudo chmod +x /usr/local/bin/docker-credential-osxkeychain
 }
 
 docker_mac_uninstall () {
@@ -181,15 +197,15 @@ $ docker-mac stop
 $ docker-mac destroy
 $ unlink /usr/local/bin/docker
 $ rm /usr/local/bin/docker-credential-osxkeychain
-$ rm -r /usr/local/lib/docker
+$ rm -r /opt/docker
 $ brew uninstall --cask multipass
 EOF
 }
 
 docker_mac_create () {
   cpus="1"
-  mem="2"
-  disk="32"
+  mem="2M"
+  disk="32G"
 
   OPTIONS=`getopt c:m:d: "$@"`
   eval set -- "$OPTIONS"
@@ -205,7 +221,7 @@ docker_mac_create () {
 
   file="$(_tmp_path)/$(uuidgen).yaml"
   _cloud_config > ${file}
-  multipass launch --name docker-vm2 --cpus ${cpus} --mem ${mem} --disk ${disk} --cloud-init $(file) 20.04
+  multipass launch --name docker-vm --cpus ${cpus} --mem ${mem} --disk ${disk} --cloud-init ${file} 20.04
   rm ${file}
 
   multipass mount $(_home_path) $(_vm_name):$(_home_path)
